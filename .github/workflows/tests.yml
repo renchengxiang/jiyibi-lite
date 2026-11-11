@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  parser-tests:
+    name: 解析器单测（javac，无 Gradle）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 跑 VoiceParser 断言（29 条）
+        run: bash tools/run-parser-tests.sh
+
+  compliance:
+    name: 合规自查（敏感串 0 命中）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 敏感串扫描
+        run: bash tools/check-sensitive.sh
