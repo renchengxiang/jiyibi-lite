@@ -1,5 +1,7 @@
 # 记一笔 Lite
 
+[![tests](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml/badge.svg)](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml)
+
 > 给老人用的**离线语音记账** Android App。按一下、说一句，钱就记上了——不联网、不注册、没有广告。
 > 纯原生 Java + SQLite，无 Gradle / 无 AndroidX / 无 Kotlin，命令行构建；语音识别跑**端侧离线模型**。
 

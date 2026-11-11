@@ -1,5 +1,7 @@
 # Jiyibi Lite — Offline Voice Bookkeeping for Elderly Users
 
+[![tests](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml/badge.svg)](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml)
+
 > An Android bookkeeping app designed for elderly users: **hold the big button, say one sentence, done.**
 > No internet, no account, no ads. Pure native Java + SQLite — no Gradle, no AndroidX, no Kotlin.
 > Speech recognition runs **fully on-device** (Vosk small Chinese model).
