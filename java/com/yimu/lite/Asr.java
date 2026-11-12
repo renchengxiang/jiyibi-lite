@@ -20,8 +20,12 @@ import java.io.ByteArrayOutputStream;
  *
  * 采集策略：**先录完整句 PCM，松手后再一次性解码**（不是边录边解码）。
  * 原因：边录边解要求解码速度 ≥ 实时；手机 CPU 一旦跟不上（大 beam / 后台抢占 / 发热降频），
- * 音频帧会被丢弃，识别结果退化成几个字的碎片。整句离线解码没有这个约束——
- * 解 3 秒的音频哪怕用 1 秒也算完，不会丢任何一帧。
+ * 音频帧会被丢弃，识别结果退化成几个字的碎片。整句离线解码没有这个约束。
+ *
+ * 已知机型问题（PHB110 / ColorOS，2026-11）：VOICE_RECOGNITION 与 MIC 两种音源下，
+ * 部分真人录音的主频集中在 16~359Hz，缺少 1k~4kHz 语音谐波，Vosk 与 SenseVoice 均无法还原。
+ * 桌面 TTS 用同一模型 7~10/10 全对，说明模型不是瓶颈；疑为按住大圆按钮时手掌遮挡底部麦克风
+ * 或系统 DSP 过度降噪。见 docs/asr-diagnosis.md。
  */
 public class Asr {
 
@@ -93,8 +97,9 @@ public class Asr {
             int min = AudioRecord.getMinBufferSize(SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             int bufSize = Math.max(min * 2, SAMPLE_RATE); // 至少 0.5 秒
-            // VOICE_RECOGNITION：关掉部分机型的自动增益/降噪，波形更接近模型训练数据
-            recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            // 用 MIC 而非 VOICE_RECOGNITION：部分 ColorOS / OEM 机型对后者做激进降噪，
+            // 会把起始人声一并削掉（实测：前 1s rms≈83，TTS 对照 3870，差 46 倍）。
+            recorder = new AudioRecord(MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT, bufSize);
             if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
@@ -154,8 +159,66 @@ public class Asr {
             if (listener != null) main.post(() -> listener.onError("说话时间太短，请按住说完再松手"));
             return;
         }
-        dumpIfDebuggable(data);
-        decode(data);
+        dumpIfDebuggable(data, "last-raw.pcm");
+        byte[] speech = trimAndNormalize(data);
+        dumpIfDebuggable(speech, "last.pcm");
+        if (speech.length < MIN_PCM_BYTES) {
+            if (listener != null) main.post(() -> listener.onError("没听到说话声，请靠近手机再说一次"));
+            return;
+        }
+        decode(speech);
+    }
+
+    /**
+     * 能量 VAD + 峰值归一化。
+     * 手机 AudioRecord 启动后前 ~1 秒常是近静音噪声（实测 rms≈83，正常语音 3870），
+     * 模型会把这段当成整句去解，输出「韭菜凉快令」这类碎片。
+     * 做法：20ms 一帧算 rms，按「峰值 10% 且不低于 200」定阈值，裁掉头尾静音，
+     * 前后各留 200ms 缓冲，再把峰值补到 0.75 满幅（增益上限 4 倍）。
+     */
+    private static byte[] trimAndNormalize(byte[] data) {
+        int n = data.length / 2;
+        if (n < 320) return data;
+        short[] s = new short[n];
+        java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .asShortBuffer().get(s);
+
+        int win = 320;                    // 20ms @16k
+        int frames = n / win;
+        double[] rms = new double[frames];
+        int peak = 0;
+        for (int f = 0; f < frames; f++) {
+            long sum = 0;
+            for (int i = 0; i < win; i++) {
+                int v = s[f * win + i];
+                sum += (long) v * v;
+                if (Math.abs(v) > peak) peak = Math.abs(v);
+            }
+            rms[f] = Math.sqrt(sum / (double) win);
+        }
+        if (peak == 0) return data;
+
+        double thr = Math.max(200.0, peak * 0.10);
+        int first = 0, last = frames - 1;
+        while (first < frames && rms[first] < thr) first++;
+        while (last > first && rms[last] < thr) last--;
+        int pad = 10;                     // 前后各 200ms
+        first = Math.max(0, first - pad);
+        last = Math.min(frames - 1, last + pad);
+        if (last - first < 15) { first = 0; last = frames - 1; }   // 太短就不裁
+
+        double gain = Math.min(4.0, (0.75 * 32767) / peak);
+        int count = (last - first + 1) * win;
+        byte[] out = new byte[count * 2];
+        java.nio.ByteBuffer ob = java.nio.ByteBuffer.wrap(out)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int i = first * win; i < (last + 1) * win; i++) {
+            int v = (int) Math.round(s[i] * gain);
+            ob.putShort((short) Math.max(-32768, Math.min(32767, v)));
+        }
+        Log.i(TAG, "VAD: frames " + frames + " -> [" + first + "," + last + "]"
+                + ", peak " + peak + ", gain " + String.format("%.2f", gain));
+        return out;
     }
 
     /**
@@ -163,14 +226,14 @@ public class Asr {
      * 真机识别不佳时把文件拉出来（adb pull）在电脑上用同一模型复解码，
      * 就能区分「是模型听错」还是「采集/链路有问题」。正式包不落盘。
      */
-    private void dumpIfDebuggable(byte[] data) {
+    private void dumpIfDebuggable(byte[] data, String name) {
         try {
             boolean debuggable = (ctx.getApplicationInfo().flags
                     & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             if (!debuggable) return;
             java.io.File dir = new java.io.File(ctx.getExternalFilesDir(null), "asr");
             if (!dir.exists() && !dir.mkdirs()) return;
-            java.io.File f = new java.io.File(dir, "last.pcm");
+            java.io.File f = new java.io.File(dir, name);
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
                 fos.write(data);
             }
