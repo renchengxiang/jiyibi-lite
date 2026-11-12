@@ -66,6 +66,32 @@ bash tools/check-sensitive.sh      # pre-release compliance: 8 sensitive pattern
 
 `run-parser-tests.sh` uses only `javac` + `java` (no JUnit, no Gradle) and the *same* script runs locally and in GitHub Actions — the CI badge reflects real assertions, not a build that merely compiles.
 
+## Real-device ASR evaluation (2026-11-12, PHB110 / ColorOS)
+
+8 short bookkeeping utterances, end-to-end after sherpa-onnx + Paraformer:
+
+| Recognized text | Amount | Category | Verdict |
+|---|---|---|---|
+| 买菜三十五 | 35.00 | Food | ⚠️ "块" dropped, off by 4.5 |
+| 搭车二十五 | 25.00 | Transport | ✅ |
+| 交房租三千八 | 3800.00 | Housing | ✅ |
+| 医院挂号二十块钱 | 20.00 | Medical | ⚠️ off by 0.05 |
+| 买药一百二十八块六 | 128.60 | Medical | ✅ |
+| 地铁充值二十五 | 25.00 | Transport | ✅ |
+| 午块二十八块五 | 28.50 | Food (hotword fixed) | ⚠️ wrong char in category word |
+| 买直径一百九十九 | 199.00 | Shopping | ⚠️ wrong char, amount correct |
+
+Both metrics are reported, to avoid cherry-picking:
+
+- **Bookable rate 8/8** — every utterance yielded a valid amount that can be confirmed
+- **Amount+category exact rate 5/8 = 62.5%** — strict per-utterance judgement
+
+One false trigger ("没有") was correctly rejected. Remaining errors are acoustic:
+the measure word "块" gets elided, losing the decimal part.
+
+Desktop TTS baseline (same 10 utterances): Vosk small 7/10, Paraformer 10/10, SenseVoice 10/10.
+Full investigation (6 hypotheses, spectral evidence, a reversed conclusion): [docs/asr-diagnosis.md](docs/asr-diagnosis.md).
+
 ## Build (no Gradle)
 
 ```bash
