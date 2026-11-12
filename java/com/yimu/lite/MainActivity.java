@@ -80,7 +80,7 @@ public class MainActivity extends Activity implements PageContract {
 
     @Override protected void onDestroy() {
         super.onDestroy();
-        if (asr != null) asr.stop();
+        if (asr != null) asr.release();
         if (voicePage != null) voicePage.onStop();
         handler.removeCallbacksAndMessages(null);
     }
