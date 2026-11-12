@@ -8,6 +8,8 @@
 
 **[中文](README.md) · [Pruning rationale](docs/trim-decisions.md) · [Architecture analysis (anonymized)](docs/anon-report.md) · [Download APK](../../releases/latest)**
 
+> The Gitee mirror does not host the APK (100MB per-file limit, this build is 134MB): download it from the [GitHub Release](https://github.com/renchengxiang/jiyibi-lite/releases/latest).
+
 ---
 
 ## The pitch

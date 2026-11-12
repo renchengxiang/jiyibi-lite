@@ -7,6 +7,8 @@
 
 **[English](README.en.md) · [裁剪决策表](docs/trim-decisions.md) · [架构分析报告（匿名）](docs/anon-report.md) · [下载 APK](../../releases/latest)**
 
+> Gitee 镜像不承载 APK 附件（单文件上限 100MB，本包 134MB）：下载请用 [GitHub Release](https://github.com/renchengxiang/jiyibi-lite/releases/latest)。
+
 ---
 
 ## 一句话定位
