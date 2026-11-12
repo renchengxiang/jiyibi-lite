@@ -1,0 +1,4 @@
+Paraformer-zh-small (sherpa-onnx-paraformer-zh-small-2024-03-09)
+Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+Original model: Alibaba DAMO Academy / FunASR, Apache-2.0
+ONNX export: k2-fsa/sherpa-onnx, Apache-2.0

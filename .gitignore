@@ -3,12 +3,13 @@ build/
 app-debug.apk
 app-debug.apk.idsig
 
-# 从 AAR/JAR 解出的依赖（build.sh 会自动解包，无需入库）
+# 离线语音模型权重（78MB，不入库；获取方式见 README「准备语音模型」）
+assets/model-paraformer/model.int8.onnx
+
+# 旧引擎遗留（Vosk，已移除）
+assets/model-cn/
 libs/aar/
 libs/jna/
-
-# 语音模型（约 42MB，不入库；获取方式见 README「准备语音模型」）
-assets/model-cn/
 
 # 系统与编辑器
 .DS_Store

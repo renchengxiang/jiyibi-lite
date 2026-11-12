@@ -76,6 +76,11 @@ public class ParserTests {
         eq("块我→块五", 30.50, "买菜三十块我");
         eq("屋→五", 12.50, "买水十二块屋");
 
+        // ---- 热词纠错：Paraformer 真机评测错例（2026-11-12） ----
+        eq("午块→午饭", "餐饮", "午块二十八块五");
+        eq("买直径→买纸巾", "购物", "买直径一百九十九");
+        eq("搭车→打车", "交通", "搭车二十五");
+
         // ---- 边界：无金额 ----
         double none = VoiceParser.parse("今天天气不错").amount;
         if (none == 0) passed++; else { failed++; System.out.println("FAIL [无金额] got=" + none); }

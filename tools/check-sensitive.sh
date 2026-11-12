@@ -24,7 +24,7 @@ HITS=0
 for p in "${PATTERNS[@]}"; do
   # 排除 .git / build / 二进制
   out=$(grep -rInE "$p" \
-        --exclude-dir=.git --exclude-dir=build --exclude-dir=model-cn \
+        --exclude-dir=.git --exclude-dir=build --exclude-dir=model-cn --exclude-dir=model-paraformer \
         --exclude='*.png' --exclude='*.apk' --exclude='*.aar' --exclude='*.jar' \
         --exclude='check-sensitive.sh' \
         . 2>/dev/null)

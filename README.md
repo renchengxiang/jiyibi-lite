@@ -3,7 +3,7 @@
 [![tests](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml/badge.svg)](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml)
 
 > 给老人用的**离线语音记账** Android App。按一下、说一句，钱就记上了——不联网、不注册、没有广告。
-> 纯原生 Java + SQLite，无 Gradle / 无 AndroidX / 无 Kotlin，命令行构建；语音识别跑**端侧离线模型**。
+> 业务逻辑纯原生 Java + SQLite，无 Gradle / 无 AndroidX，命令行构建（仅 sherpa-onnx AAR 由 Kotlin 编译，构建时引入 kotlin-stdlib）；语音识别跑**端侧离线模型**（sherpa-onnx + Paraformer-zh-small）。
 
 **[English](README.en.md) · [裁剪决策表](docs/trim-decisions.md) · [架构分析报告（匿名）](docs/anon-report.md) · [下载 APK](../../releases/latest)**
 
@@ -40,7 +40,7 @@ MainActivity (骨架: 顶栏 + 内容区 + 页签)
 ├── Ui            控件工厂（颜色 / 卡片 / 大按钮 / 分段器）
 ├── PageContract  页面 ↔ 骨架回调契约
 ├── VoiceParser   热词纠错 + 中文数字 + 金额/分类抽取（纯 Java，可单测）
-├── Asr           Vosk 封装（模型解压 / Recognizer / SpeechService）
+├── Asr           sherpa-onnx 封装（AudioRecord / VAD / OfflineRecognizer）
 ├── Db            SQLite：account / category / bill / budget
 └── CsvExporter   MediaStore 导出（Android 10+ 免权限）
 ```
@@ -51,19 +51,21 @@ MainActivity (骨架: 顶栏 + 内容区 + 页签)
 | VoicePage | 340 | 语音页 |
 | SummaryPage | 314 | 汇总页 |
 | Db | 750 | 数据层 |
-| VoiceParser | 247 | 文本 → 账单 |
+| VoiceParser | 250 | 文本 → 账单 |
 | 其余 | <200 各 | 单页 / 单职责 |
 
 ## 离线语音链路的三个工程决策
 
-1. **调宽解码束**：`conf/model.conf` 里 `beam 12→20`、`lattice-beam 4→6`、`max-active 5000→8000`，用延迟换准确率（端侧无并发压力，值得）。
-2. **热词纠错层**：小模型对"块/角/元"这类高频量词极不稳定（会/快/愧 → 块，搅 → 角，猫/冒 → 毛），在文本进解析器前先做同音映射；长模式优先（`会五→块五`），避免单字替换把数字带错。
-3. **中文数字与省略表达**：`三十块五`=30.5、`三千八`=3800、`一万二`=12000、`128角6`=128.6，全部在纯 Java 里处理——**不依赖 Android，可直接在 CI 跑单测**。
+1. **先录完整句再整句解码**（不是边录边解）：手机 CPU 一旦解码慢于实时就会丢音频帧，识别退化成 2~4 字碎片。整句离线解码无此约束。
+2. **采集质量修正**：`AudioSource.MIC` + 20ms 帧能量 VAD 裁头尾静音 + 峰值归一化。真机实测 RMS 1123→4967，语音高频谐波恢复。
+3. **引擎选型（见 [ADR-005](docs/03-tech/adr/ADR-005-paraformer-small.md)）**：Vosk small 在真人语音上系统性出错，改用 **Paraformer-zh-small int8（78MB）**，同批真人录音与 10 句 TTS 全对；SenseVoice（228MB）精度相同但体积 3 倍，未采用。
+
+另有**热词纠错层**：对"块/角/元"这类高频量词（会/快/愧→块，搅→角，午块→午饭）做同音映射；`三十块五`=30.5、`三千八`=3800、`128角6`=128.6 等中文数字在纯 Java 里处理——**不依赖 Android，可直接在 CI 跑单测**。
 
 ## 测试与质量
 
 ```bash
-bash tools/run-parser-tests.sh     # 29 条断言：金额 / 类型 / 分类 / 热词纠错 / 边界
+bash tools/run-parser-tests.sh     # 36 条断言：金额 / 类型 / 分类 / 热词纠错 / 边界
 bash tools/check-sensitive.sh      # 发布前合规自查：8 个敏感串必须 0 命中
 ```
 
@@ -80,16 +82,19 @@ bash build.sh        # aapt2 → javac → d8 → zipalign → apksigner，产�
 
 ### 准备语音模型
 
-仓库不含模型（约 42MB）。用 Vosk 官方中文小模型：
+仓库不含 78MB 的模型文件（体积原因）。从 sherpa-onnx 官方发布页获取：
 
 ```bash
-# 下载 vosk-model-small-cn-0.22 后解压到 assets/model-cn/
-mkdir -p assets/model-cn
-unzip vosk-model-small-cn-0.22.zip -d assets/model-cn/
-# 目录内应能看到 am/ conf/ graph/ ivector/ 等
+# 下载 sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2 后：
+mkdir -p assets/model-paraformer
+cp model.int8.onnx tokens.txt assets/model-paraformer/
 ```
 
-模型来源：<https://alphacephei.com/vosk/models>（Apache-2.0）。缺模型时 App 仍可构建运行，语音按钮会提示"准备中"，手输不受影响。
+模型来源：<https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>（Apache-2.0）。
+`libs/sherpa/` 里的 AAR 解包产物与 kotlin-stdlib 已随仓库提供。
+缺模型时 App 仍可构建运行，语音按钮会提示"准备中"，手输不受影响。
+
+> 只构建 arm64-v8a：32 位设备不支持（占比可忽略）。
 
 ## 安装
 
@@ -108,15 +113,15 @@ minSdk 26（Android 8.0）/ targetSdk 36；仅申请 `RECORD_AUDIO` 一项权限
 ## 数据与隐私
 
 - 所有账单存在本机 SQLite（`Custom.db` 等价于应用私有库），**不联网、不上传、无账号**。
-- 语音识别在本机完成（Vosk 离线模型），音频不落盘、不外传。
+- 语音识别在本机完成（Paraformer 离线模型），音频不落盘、不外传。
 - 换手机：汇总页「导出全部账单」→ CSV 落到系统「下载」目录（UTF-8 带 BOM，Excel 直接打开不乱码）。
 
 ## 已知边界（诚实记录）
 
 | 边界 | 现状 | 备选方案 |
 |---|---|---|
-| 中文识别率 | 小模型 + 热词纠错，安静环境短句可用；方言/嘈杂环境明显下降 | 换中模型或 sherpa-onnx（体积/延迟上升，未验证） |
-| 模型体积 | APK 47MB（模型占 42MB） | 首次启动下载（违背"开箱即用"，未采纳） |
+| 中文识别率 | Paraformer 真人 8 句全部入账、5 句全对；"块"被吞导致小数丢失 | 更大模型 / 语言学重打分（未验证） |
+| 模型体积 | APK 144MB（模型 78MB + 运行时 31MB） | 首次启动下载（违背"开箱即用"，未采纳） |
 | Android 9 及以下 | CSV 落应用私有目录并提示路径 | 不做反向适配（覆盖设备占比极低） |
 | 多账户/多账本 | 不支持，单默认账户 | 有意砍掉，见决策表 |
 | 数据加密 | 数据库明文（数据不出设备） | 若要分享设备，优先补 SQLCipher |
@@ -127,12 +132,12 @@ minSdk 26（Android 8.0）/ targetSdk 36；仅申请 `RECORD_AUDIO` 一项权限
 ├── AndroidManifest.xml      仅 RECORD_AUDIO
 ├── build.sh                 aapt2 + javac + d8 + zipalign + apksigner
 ├── java/com/yimu/lite/      10 个源文件（见架构）
-├── assets/model-cn/         离线语音模型（不入库）
-├── libs/                    Vosk AAR + JNA（vendored，构建时解包）
+├── assets/model-paraformer/ Paraformer int8 模型（不入库）
+├── libs/sherpa/             sherpa-onnx AAR(arm64) + kotlin-stdlib
 ├── tools/                   解析器单测 + 合规自查
 └── docs/                    裁剪决策表 / 架构报告 / 截图
 ```
 
 ## 许可
 
-代码 MIT。语音模型来自 Vosk（Apache-2.0），Vosk/JNA 依赖各自遵循其原始许可。
+代码 MIT。语音模型 Paraformer-zh-small 与 sherpa-onnx 均为 Apache-2.0；kotlin-stdlib 为 Apache-2.0。

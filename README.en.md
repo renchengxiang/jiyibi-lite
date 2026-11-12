@@ -3,8 +3,8 @@
 [![tests](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml/badge.svg)](https://github.com/renchengxiang/jiyibi-lite/actions/workflows/tests.yml)
 
 > An Android bookkeeping app designed for elderly users: **hold the big button, say one sentence, done.**
-> No internet, no account, no ads. Pure native Java + SQLite — no Gradle, no AndroidX, no Kotlin.
-> Speech recognition runs **fully on-device** (Vosk small Chinese model).
+> No internet, no account, no ads. Business logic: pure native Java + SQLite, no Gradle, no AndroidX, command-line build (sherpa-onnx AAR is Kotlin-compiled; kotlin-stdlib is added at build time).
+> Speech recognition runs **fully on-device** (sherpa-onnx + Paraformer-zh-small int8).
 
 **[中文](README.md) · [Pruning rationale](docs/trim-decisions.md) · [Architecture analysis (anonymized)](docs/anon-report.md) · [Download APK](../../releases/latest)**
 
@@ -44,7 +44,7 @@ MainActivity (shell: header + content + tab bar)
 ├── Ui            widget factory (colors, cards, big buttons, segmented control)
 ├── PageContract  page ↔ shell callback contract
 ├── VoiceParser   hotword correction + Chinese numerals + amount/category extraction (pure Java, unit-testable)
-├── Asr           Vosk wrapper (model unpack / Recognizer / SpeechService)
+├── Asr           sherpa-onnx wrapper (AudioRecord / VAD / OfflineRecognizer)
 ├── Db            SQLite: account / category / bill / budget
 └── CsvExporter   MediaStore export (no permissions on Android 10+)
 ```
@@ -60,7 +60,7 @@ All classes are under 400 lines; the shell dropped from 1310 → 222 lines when 
 ## Tests
 
 ```bash
-bash tools/run-parser-tests.sh     # 29 assertions: amounts / type / category / hotwords / edge cases
+bash tools/run-parser-tests.sh     # 36 assertions: amounts / type / category / hotwords / edge cases
 bash tools/check-sensitive.sh      # pre-release compliance: 8 sensitive patterns must be 0 hits
 ```
 
@@ -77,14 +77,17 @@ The script also unpacks dependencies from `libs/*.aar`, warns and degrades grace
 
 ### Fetch the speech model
 
-The repo does not ship the ~42MB model. Use Vosk's small Chinese model:
+The 78MB model is not committed. Get `sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2`
+from the [sherpa-onnx model releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)
+(Apache-2.0), then:
 
 ```bash
-mkdir -p assets/model-cn
-unzip vosk-model-small-cn-0.22.zip -d assets/model-cn/   # should contain am/ conf/ graph/ ivector/
+mkdir -p assets/model-paraformer
+cp model.int8.onnx tokens.txt assets/model-paraformer/
 ```
 
-Source: <https://alphacephei.com/vosk/models> (Apache-2.0). Without it the app still builds and runs; only the voice button is unavailable, manual entry works.
+`libs/sherpa/` (AAR extract + kotlin-stdlib) is vendored. arm64-v8a only.
+Without the model the app still builds and runs; only the voice button is unavailable.
 
 ## Install
 
@@ -103,19 +106,19 @@ minSdk 26 (Android 8.0), targetSdk 36. Single permission: `RECORD_AUDIO`. `allow
 ## Privacy
 
 - All data lives in a local SQLite database. No network permission, no account, no upload.
-- Speech recognition is on-device (Vosk); audio is never written to disk or sent anywhere.
+- Speech recognition is on-device (Paraformer); audio is never written to disk or sent anywhere.
 - Migration: Summary → *Export all bills* → CSV in the system **Downloads** folder (UTF-8 with BOM, opens cleanly in Excel).
 
 ## Known limits (stated honestly)
 
 | Limit | Current state | Alternative |
 |---|---|---|
-| Chinese accuracy | Small model + hotwords: fine for short utterances in quiet rooms; dialects / noise degrade | Medium model or sherpa-onnx (size/latency up, unverified) |
-| APK size | 47MB (42MB is the model) | Download on first launch (rejected: breaks "works out of the box") |
+| Chinese accuracy | 8/8 real utterances bookable, 5/8 exact; "块" elision loses decimals | Larger model / linguistic rescoring (unverified) |
+| APK size | 144MB (78MB model + 31MB runtime) | Download on first launch (rejected: breaks "works out of the box") |
 | Android ≤9 | CSV falls back to app-private dir with the path shown | No back-port (negligible share) |
 | Multi-account / multi-book | Not supported; single default account | Deliberate cut, see decision table |
 | At-rest encryption | Plain SQLite (data never leaves the device) | If the device gets shared, add SQLCipher first |
 
 ## License
 
-Code: MIT. Speech model: Vosk (Apache-2.0); Vosk/JNA keep their original licenses.
+Code: MIT. Paraformer-zh-small, sherpa-onnx and kotlin-stdlib are Apache-2.0.

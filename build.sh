@@ -1,5 +1,6 @@
 #!/bin/bash
 # build.sh —— 不依赖 Gradle / AGP：aapt2 + javac + d8 + zipalign + apksigner
+# 语音引擎：sherpa-onnx 2.0.1 (arm64-v8a) + Paraformer-zh-small int8
 set -e
 
 SDK="$HOME/Library/Android/sdk"
@@ -8,24 +9,26 @@ JAR="$SDK/platforms/android-36/android.jar"
 JDK="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 OUT="build"
 
-rm -rf "$OUT"
-mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
+SHERPA="libs/sherpa"
+SHERPA_JARS="$SHERPA/sherpa-onnx-classes.jar $SHERPA/kotlin-stdlib.jar"
+CP_DEPS="$SHERPA/sherpa-onnx-classes.jar:$SHERPA/kotlin-stdlib.jar"
 
-# 0/6 解包依赖（幂等：只在缺失时从 AAR/JAR 解出，产物不入库）
-if [ ! -f libs/aar/classes.jar ]; then
-  echo "==> 0/6 解包 Vosk AAR"
-  mkdir -p libs/aar
-  (cd libs/aar && unzip -oq ../vosk-android-0.3.47.aar)
+rm -rf "$OUT"
+mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/lib/arm64-v8a"
+
+# 0/6 依赖检查（模型与 .so 随仓库提供，不落盘生成）
+if [ ! -f "$SHERPA/sherpa-onnx-classes.jar" ] || [ ! -f "$SHERPA/kotlin-stdlib.jar" ]; then
+  echo "缺少 sherpa-onnx 依赖，请检查 libs/sherpa/"; exit 1
 fi
-if [ ! -f libs/jna/classes.jar ]; then
-  echo "==> 0/6 解包 JNA AAR"
-  mkdir -p libs/jna
-  (cd libs/jna && unzip -oq ../jna.aar)
-fi
-if [ ! -d assets/model-cn ]; then
-  echo "⚠️  assets/model-cn 不存在：将构建出「无语音模型」的 APK（只能手输）。"
+for so in libonnxruntime.so libsherpa-onnx-c-api.so libsherpa-onnx-cxx-api.so libsherpa-onnx-jni.so; do
+  if [ ! -f "$SHERPA/arm64-v8a/$so" ]; then
+    echo "缺少 $SHERPA/arm64-v8a/$so"; exit 1
+  fi
+done
+if [ ! -f assets/model-paraformer/model.int8.onnx ]; then
+  echo "⚠️  assets/model-paraformer 不存在：将构建出「无语音模型」的 APK（只能手输）。"
   echo "    获取方式见 README「准备语音模型」。"
-  mkdir -p assets/model-cn
+  mkdir -p assets/model-paraformer
 fi
 
 echo "==> 1/6 编译资源"
@@ -41,23 +44,24 @@ echo "==> 2/6 链接资源与清单（含离线语音模型 assets）"
   --java "$OUT/gen" \
   --min-sdk-version 26 \
   --target-sdk-version 36 \
-  --auto-add-overlay
+  --auto-add-overlay \
+  -0 onnx
 
 echo "==> 3/6 编译 Java"
 find java "$OUT/gen" -name "*.java" > "$OUT/sources.txt"
-CP="$JAR:libs/aar/classes.jar:libs/jna/classes.jar"
+CP="$JAR:$CP_DEPS"
 "$JDK/bin/javac" --release 11 -encoding UTF-8 -nowarn \
   -cp "$CP" -d "$OUT/classes" @"$OUT/sources.txt"
 
 echo "==> 4/6 dex"
 find "$OUT/classes" -name "*.class" > "$OUT/classes.txt"
+# 三方 jar 一起送进 d8 打成 classes.dex
 "$JDK/bin/java" -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 \
   --lib "$JAR" --min-api 26 --output "$OUT/dex" \
-  @"$OUT/classes.txt" libs/aar/classes.jar libs/jna/classes.jar
+  @"$OUT/classes.txt" $SHERPA_JARS
+
 echo "==> 5/6 打包 classes.dex 与原生库"
-mkdir -p "$OUT/lib/arm64-v8a"
-cp libs/aar/jni/arm64-v8a/libvosk.so "$OUT/lib/arm64-v8a/"
-cp libs/jna/jni/arm64-v8a/libjnidispatch.so "$OUT/lib/arm64-v8a/"
+cp "$SHERPA/arm64-v8a/"*.so "$OUT/lib/arm64-v8a/"
 cp "$OUT/base.apk" "$OUT/unsigned.apk"
 (cd "$OUT/dex" && zip -q -X "../unsigned.apk" classes.dex)
 (cd "$OUT" && zip -q -r -X "unsigned.apk" lib)
